@@ -1,0 +1,23 @@
+{
+  "name": "doge-viking-token",
+  "version": "1.0.0",
+  "description": "ERC-20 with deflationary and vesting mechanism",
+  "main": "index.js",
+  "author": "thor",
+  "license": "MIT",
+  "private": false,
+  "devDependencies": {
+    "@truffle/hdwallet-provider": "^1.4.0",
+    "eslint": "^7.27.0",
+    "eslint-plugin-unicorn": "^33.0.1",
+    "prettier": "^2.3.0",
+    "prettier-plugin-solidity": "^1.0.0-beta.11"
+  },
+    "scripts": {
+    "prettier:sol": "prettier --write 'contracts/**/*.sol'",
+    "lint": "eslint . --ext js",
+    "prettier:js": "prettier --write **/*.js",
+    "build": "npx truffle compile",
+    "migrate:testnet": "truffle deploy --network testnet"
+  }
+}
