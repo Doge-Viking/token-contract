@@ -145,7 +145,6 @@ contract DogeViking is DogeVikingMetaData, Ownable {
     function avaliableBalanceOf(address account)
         external
         view
-        override
         returns (uint256)
     {
         uint256 rVestingTax =
@@ -153,7 +152,7 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         return _tokenFromReflection(_reflectionBalance[account] - rVestingTax);
     }
 
-    function balanceOf(address account) public view returns (uint256) {
+    function balanceOf(address account) public view override returns (uint256) {
         return _tokenFromReflection(_reflectionBalance[account]);
     }
 
