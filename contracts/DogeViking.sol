@@ -33,15 +33,13 @@ contract DogeViking is DogeVikingMetaData, Ownable {
 
     uint8 public vestingFee = 50;
 
-    uint256 private _previousVestingFee = vestingFee;
+    uint8 private _previousVestingFee = vestingFee;
 
     uint256 private _totalTokenFees;
 
     // Wallets *************************************************************
 
     mapping(address => uint256) private _reflectionBalance;
-
-    mapping(address => uint256) private _tokenBalance;
 
     mapping(address => mapping(address => uint256)) private _allowances;
 
@@ -144,7 +142,7 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         return reflectionAmount / _getRate();
     }
 
-    function balanceOf(address account)
+    function avaliableBalanceOf(address account)
         external
         view
         override
@@ -155,7 +153,7 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         return _tokenFromReflection(_reflectionBalance[account] - rVestingTax);
     }
 
-    function fullBalanceOf(address account) public view returns (uint256) {
+    function balanceOf(address account) public view returns (uint256) {
         return _tokenFromReflection(_reflectionBalance[account]);
     }
 
@@ -189,21 +187,29 @@ contract DogeViking is DogeVikingMetaData, Ownable {
     }
 
     function _removeAllFees() private {
-        if (liquidityFee == 0 && dogeVikingFundFee == 0 && txFee == 0) return;
+        if (
+            liquidityFee == 0 &&
+            dogeVikingFundFee == 0 &&
+            txFee == 0 &&
+            vestingFee == 0
+        ) return;
 
         _previousLiquidityFee = liquidityFee;
         _previousDogeVikingFundFee = dogeVikingFundFee;
         _previousTxFee = txFee;
+        _previousVestingFee = vestingFee;
 
         liquidityFee = 0;
         dogeVikingFundFee = 0;
         txFee = 0;
+        vestingFee = 0;
     }
 
     function _restoreAllFees() private {
         liquidityFee = _previousLiquidityFee;
         dogeVikingFundFee = _previousDogeVikingFundFee;
         txFee = _previousTxFee;
+        vestingFee = _previousVestingFee;
     }
 
     function setSwapAndLiquifyingState(bool state) external onlyOwner() {
@@ -274,7 +280,7 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         ) {
             require(
                 _tokenFromReflection(_reflectionBalance[recipient] + rAmount) <=
-                    maxTxAmount,
+                    2 * 1e3 ether,
                 "No whales allowed right now :)"
             );
         }
@@ -412,7 +418,7 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         // Condition 4: It is not the uniswapPair that is sending tokens
 
         if (
-            fullBalanceOf(address(this)) >= _numberTokensSellToAddToLiquidity &&
+            balanceOf(address(this)) >= _numberTokensSellToAddToLiquidity &&
             !_swapAndLiquifyingInProgress &&
             isSwapAndLiquifyingEnabled &&
             sender != address(uniswapV2WETHPair)
@@ -531,3 +537,4 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         return true;
     }
 }
+
