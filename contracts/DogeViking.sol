@@ -19,21 +19,17 @@ contract DogeViking is DogeVikingMetaData, Ownable {
 
     // Taxes *************************************************************
 
-    uint8 public liquidityFee = 5;
+    uint8 public liquidityFee = 20;
 
     uint8 private _previousLiquidityFee = liquidityFee;
 
-    uint8 public dogeVikingFundFee = 2;
+    uint8 public dogeVikingPoolFee = 2;
 
-    uint8 private _previousDogeVikingFundFee = dogeVikingFundFee;
+    uint8 private _previousDogeVikingPoolFee = dogeVikingPoolFee;
 
     uint8 public txFee = 3;
 
     uint8 private _previousTxFee = txFee;
-
-    uint8 public vestingFee = 50;
-
-    uint8 private _previousVestingFee = vestingFee;
 
     uint256 private _totalTokenFees;
 
@@ -75,13 +71,13 @@ contract DogeViking is DogeVikingMetaData, Ownable {
 
     // Addresses *************************************************************
 
-    address public immutable vikingFund;
+    address public vikingPool;
 
     IUniswapV2Router02 public immutable uniswapV2Router;
 
     address public immutable uniswapV2WETHPair;
 
-    constructor(address routerAddress, address vikingFundAddress) {
+    constructor(address routerAddress, address vikingPoolAddress) {
         _reflectionBalance[_msgSender()] = _reflectionSupply;
 
         IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(routerAddress);
@@ -91,11 +87,11 @@ contract DogeViking is DogeVikingMetaData, Ownable {
 
         uniswapV2Router = _uniswapV2Router;
 
-        vikingFund = vikingFundAddress;
+        vikingPool = vikingPoolAddress;
 
         _isExcludedFromFees[owner()] = true;
         _isExcludedFromFees[address(this)] = true;
-        _isExcludedFromFees[vikingFundAddress] = true;
+        _isExcludedFromFees[vikingPoolAddress] = true;
 
         emit Transfer(address(0), _msgSender(), _tokenSupply);
     }
@@ -142,25 +138,8 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         return reflectionAmount / _getRate();
     }
 
-    function avaliableBalanceOf(address account)
-        external
-        view
-        returns (uint256)
-    {
-        uint256 rVestingTax =
-            _calculatingVestingFee(_reflectionBalance[account]);
-        return _tokenFromReflection(_reflectionBalance[account] - rVestingTax);
-    }
-
     function balanceOf(address account) public view override returns (uint256) {
         return _tokenFromReflection(_reflectionBalance[account]);
-    }
-
-    function vestedBalanceOf(address account) external view returns (uint256) {
-        return
-            _tokenFromReflection(
-                _calculatingVestingFee(_reflectionBalance[account])
-            );
     }
 
     function totalFees() external view returns (uint256) {
@@ -186,29 +165,21 @@ contract DogeViking is DogeVikingMetaData, Ownable {
     }
 
     function _removeAllFees() private {
-        if (
-            liquidityFee == 0 &&
-            dogeVikingFundFee == 0 &&
-            txFee == 0 &&
-            vestingFee == 0
-        ) return;
+        if (liquidityFee == 0 && dogeVikingPoolFee == 0 && txFee == 0) return;
 
         _previousLiquidityFee = liquidityFee;
-        _previousDogeVikingFundFee = dogeVikingFundFee;
+        _previousDogeVikingPoolFee = dogeVikingPoolFee;
         _previousTxFee = txFee;
-        _previousVestingFee = vestingFee;
 
         liquidityFee = 0;
-        dogeVikingFundFee = 0;
+        dogeVikingPoolFee = 0;
         txFee = 0;
-        vestingFee = 0;
     }
 
     function _restoreAllFees() private {
         liquidityFee = _previousLiquidityFee;
-        dogeVikingFundFee = _previousDogeVikingFundFee;
+        dogeVikingPoolFee = _previousDogeVikingPoolFee;
         txFee = _previousTxFee;
-        vestingFee = _previousVestingFee;
     }
 
     function setSwapAndLiquifyingState(bool state) external onlyOwner() {
@@ -236,16 +207,8 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         return _calculateFee(amount, liquidityFee);
     }
 
-    function _calculateFundFee(uint256 amount) private view returns (uint256) {
-        return _calculateFee(amount, dogeVikingFundFee);
-    }
-
-    function _calculatingVestingFee(uint256 amount)
-        private
-        view
-        returns (uint256)
-    {
-        return _calculateFee(amount, vestingFee);
+    function _calculatePoolFee(uint256 amount) private view returns (uint256) {
+        return _calculateFee(amount, dogeVikingPoolFee);
     }
 
     function _reflectFee(uint256 rfee, uint256 fee) private {
@@ -287,41 +250,42 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         _reflectionBalance[sender] = _reflectionBalance[sender] - rAmount;
 
         // Holders retribution
-        uint256 tax = _calculateTxFee(amount);
-        uint256 rTax = _reflectionFromToken(tax);
+        uint256 rTax = _reflectionFromToken(_calculateTxFee(amount));
 
-        // Fund retribution
-        uint256 fundTax = _calculateFundFee(amount);
-        uint256 rFundTax = _reflectionFromToken(fundTax);
+        // Pool retribution
+        uint256 rPoolTax = _reflectionFromToken(_calculatePoolFee(amount));
 
         // Liquidity retribution
-        uint256 liquidityTax = _calculateLiquidityFee(amount);
-        uint256 rLiquidityTax = _reflectionFromToken(liquidityTax);
-
-        // Vesting Fee
-        uint256 vestingTax = _calculatingVestingFee(amount);
-        uint256 rVestingTax = _reflectionFromToken(vestingTax);
+        uint256 rLiquidityTax =
+            _reflectionFromToken(_calculateLiquidityFee(amount));
 
         // Since the recipient is also  excluded. We need to update his reflections and tokens.
         _reflectionBalance[recipient] =
             _reflectionBalance[recipient] +
             rAmount -
             rTax -
-            rFundTax -
-            rLiquidityTax -
-            rVestingTax;
+            rPoolTax -
+            rLiquidityTax;
 
-        _reflectionBalance[vikingFund] =
-            _reflectionBalance[vikingFund] +
-            rFundTax;
+        _reflectionBalance[vikingPool] =
+            _reflectionBalance[vikingPool] +
+            rPoolTax;
 
-        _takeLiquidity(rLiquidityTax + rVestingTax);
-        _reflectFee(rTax, tax + fundTax + liquidityTax + vestingTax);
+        _takeLiquidity(rLiquidityTax);
+        _reflectFee(
+            rTax,
+            _calculateTxFee(amount) +
+                _calculatePoolFee(amount) +
+                _calculateLiquidityFee(amount)
+        );
 
         emit Transfer(
             sender,
             recipient,
-            amount - vestingTax - liquidityTax - fundTax - tax
+            amount -
+                _calculateLiquidityFee(amount) -
+                _calculatePoolFee(amount) -
+                _calculateTxFee(amount)
         );
 
         // Restores all fees if they were disabled.
@@ -452,13 +416,13 @@ contract DogeViking is DogeVikingMetaData, Ownable {
     // Events *************************************************************
 
     function setLiquidityFee(uint8 amount) external onlyOwner() {
-        require(amount <= 10, "The maximum amount allowed is 10%");
+        require(amount <= 20, "The maximum amount allowed is 20%");
         liquidityFee = amount;
     }
 
     function setDogeVikingFundFee(uint8 amount) external onlyOwner() {
-        require(amount <= 5, "The maximum amount allowed is 5%");
-        dogeVikingFundFee = amount;
+        require(amount <= 3, "The maximum amount allowed is 3%");
+        dogeVikingPoolFee = amount;
     }
 
     function setTxFee(uint8 amount) external onlyOwner() {
@@ -466,9 +430,10 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         txFee = amount;
     }
 
-    function setVestingFee(uint8 amount) external onlyOwner() {
-        require(amount <= 60, "The maximum amount allowed is 60%");
-        vestingFee = amount;
+    function setPoolAddress(address _address) external onlyOwner() {
+        _isExcludedFromFees[vikingPool] = false;
+        _isExcludedFromFees[_address] = true;
+        vikingPool = _address;
     }
 
     function transfer(address recipient, uint256 amount)
@@ -536,4 +501,3 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         return true;
     }
 }
-
