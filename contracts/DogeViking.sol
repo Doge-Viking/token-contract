@@ -6,6 +6,15 @@ import "./DogeVikingMetaData.sol";
 import "./lib/Ownable.sol";
 import "./interfaces/IUniswapV2Router02.sol";
 import "./interfaces/IUniswapV2Factory.sol";
+import "./interfaces/IUniswapV2Pair.sol";
+
+struct Exceptions {
+    bool noHoldingLimit;
+    bool noFees;
+    bool noMaxTxAmount;
+}
+
+enum Token {ZERO, ONE}
 
 contract DogeViking is DogeVikingMetaData, Ownable {
     // Supply *************************************************************
@@ -39,15 +48,29 @@ contract DogeViking is DogeVikingMetaData, Ownable {
 
     mapping(address => mapping(address => uint256)) private _allowances;
 
+    mapping(address => uint256) public previousSale;
+
     // Privileges *************************************************************
 
-    mapping(address => bool) private _isExcludedFromFees;
+    mapping(address => Exceptions) public exceptions;
 
-    // Tx Data *************************************************************
+    // Constraints *************************************************************
 
+    // 0.5% of the total supply
     uint256 public constant maxTxAmount = 5 * 1e3 ether;
 
-    uint256 private constant _numberTokensSellToAddToLiquidity = 5 * 1e2 ether;
+    // 0.05% of the total supply
+    uint256 public numberTokensSellToAddToLiquidity = 5 * 1e2 ether;
+
+    // 0.05% of the total supply
+    uint256 public sellLimitThreshold = 5 * 1e2 ether;
+
+    // 0.1% of the total supply
+    uint256 public maxHoldingAmount = 1 * 1e3 ether;
+
+    uint256 public sellDelay = 3 days;
+
+    uint256 public liquidityRatioBps = 50;
 
     // Events *************************************************************
 
@@ -65,17 +88,13 @@ contract DogeViking is DogeVikingMetaData, Ownable {
 
     bool private _swapAndLiquifyingInProgress;
 
-    bool public allowTrading;
-
-    bool public catchWhales = true;
-
     // Addresses *************************************************************
 
     address public vikingPool;
 
-    IUniswapV2Router02 public immutable uniswapV2Router;
+    IUniswapV2Router02 public uniswapV2Router;
 
-    address public immutable uniswapV2WETHPair;
+    address public uniswapV2WETHPair;
 
     constructor(address routerAddress, address vikingPoolAddress) {
         _reflectionBalance[_msgSender()] = _reflectionSupply;
@@ -89,9 +108,14 @@ contract DogeViking is DogeVikingMetaData, Ownable {
 
         vikingPool = vikingPoolAddress;
 
-        _isExcludedFromFees[owner()] = true;
-        _isExcludedFromFees[address(this)] = true;
-        _isExcludedFromFees[vikingPoolAddress] = true;
+        exceptions[owner()].noFees = true;
+        exceptions[address(this)].noFees = true;
+        exceptions[vikingPoolAddress].noFees = true;
+
+        exceptions[owner()].noHoldingLimit = true;
+        exceptions[address(this)].noHoldingLimit = true;
+        exceptions[vikingPoolAddress].noHoldingLimit = true;
+        exceptions[uniswapV2WETHPair].noHoldingLimit = true;
 
         emit Transfer(address(0), _msgSender(), _tokenSupply);
     }
@@ -107,7 +131,7 @@ contract DogeViking is DogeVikingMetaData, Ownable {
     }
 
     function isExcludedFromFees(address account) external view returns (bool) {
-        return _isExcludedFromFees[account];
+        return exceptions[account].noFees;
     }
 
     function _getRate() private view returns (uint256) {
@@ -144,24 +168,6 @@ contract DogeViking is DogeVikingMetaData, Ownable {
 
     function totalFees() external view returns (uint256) {
         return _totalTokenFees;
-    }
-
-    function deliver(uint256 amount) public {
-        address sender = _msgSender();
-        uint256 reflectionAmount = _reflectionFromToken(amount);
-        _reflectionBalance[sender] =
-            _reflectionBalance[sender] -
-            reflectionAmount;
-        _reflectionSupply -= reflectionAmount;
-        _totalTokenFees += amount;
-    }
-
-    function excludeFromFees(address account) external onlyOwner() {
-        _isExcludedFromFees[account] = true;
-    }
-
-    function includeInFees(address account) external onlyOwner() {
-        _isExcludedFromFees[account] = false;
     }
 
     function _removeAllFees() private {
@@ -234,19 +240,6 @@ contract DogeViking is DogeVikingMetaData, Ownable {
 
         uint256 rAmount = _reflectionFromToken(amount);
 
-        if (
-            catchWhales &&
-            recipient != address(uniswapV2WETHPair) &&
-            sender != owner() &&
-            recipient != owner()
-        ) {
-            require(
-                _tokenFromReflection(_reflectionBalance[recipient] + rAmount) <=
-                    2 * 1e3 ether,
-                "No whales allowed right now :)"
-            );
-        }
-
         _reflectionBalance[sender] = _reflectionBalance[sender] - rAmount;
 
         // Holders retribution
@@ -279,6 +272,7 @@ contract DogeViking is DogeVikingMetaData, Ownable {
                 _calculateLiquidityFee(amount)
         );
 
+        previousSale[sender] = block.timestamp;
         emit Transfer(
             sender,
             recipient,
@@ -327,8 +321,8 @@ contract DogeViking is DogeVikingMetaData, Ownable {
 
     function _swapAndLiquefy() private lockTheSwap {
         // split the contract token balance into halves
-        uint256 half = _numberTokensSellToAddToLiquidity / 2;
-        uint256 otherHalf = _numberTokensSellToAddToLiquidity - half;
+        uint256 half = numberTokensSellToAddToLiquidity / 2;
+        uint256 otherHalf = numberTokensSellToAddToLiquidity - half;
 
         uint256 initialETHContractBalance = address(this).balance;
 
@@ -342,14 +336,6 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         _addLiquidity(otherHalf, ethBought);
 
         emit SwapAndLiquefy(half, ethBought, otherHalf);
-    }
-
-    function enableTrading() external onlyOwner() {
-        allowTrading = true;
-    }
-
-    function freeWhales() external onlyOwner() {
-        catchWhales = false;
     }
 
     function _transfer(
@@ -366,13 +352,77 @@ contract DogeViking is DogeVikingMetaData, Ownable {
             "ERC20: Recipient cannot be the zero address"
         );
         require(amount > 0, "Transfer amount must be greater than zero");
-        if (sender != owner() && recipient != owner()) {
-            require(
-                amount <= maxTxAmount,
-                "Transfer amount exceeds the maxTxAmount."
-            );
 
-            require(allowTrading, "Nice try :)");
+        // Owner has no limits
+        if (sender != owner() && recipient != owner()) {
+            // Future utility contracts might need conduct large TXs.
+            if (!exceptions[sender].noMaxTxAmount)
+                require(
+                    amount <= maxTxAmount,
+                    "Transfer amount exceeds the maxTxAmount."
+                );
+
+            // Future utility contracts and EOA like exchanges should not have a holding limit
+            if (!exceptions[recipient].noHoldingLimit) {
+                require(
+                    balanceOf(recipient) + amount <= maxHoldingAmount,
+                    "Your holdings will pass the limit."
+                );
+            }
+
+            // Should be limited to selling on pancake swap to protect holders or when it is this contract selling for the liquidity event
+            if (
+                recipient == address(uniswapV2Router) ||
+                (recipient == address(uniswapV2WETHPair) &&
+                    sender != address(this))
+            ) {
+                // Only whales get triggered
+                if (balanceOf(sender) > sellLimitThreshold) {
+                    address pair =
+                        IUniswapV2Factory(uniswapV2Router.factory()).getPair(
+                            address(this),
+                            uniswapV2Router.WETH()
+                        );
+
+                    // If the pair with WETH exists. Sell orders above a certain percentage of the total liquidity will be refused.
+                    if (pair != address(0)) {
+                        address token0 = IUniswapV2Pair(pair).token0();
+
+                        Token ourToken =
+                            address(this) == token0 ? Token.ZERO : Token.ONE;
+
+                        (uint256 reserve0, uint256 reserve1, ) =
+                            IUniswapV2Pair(pair).getReserves();
+
+                        if (
+                            ourToken == Token.ZERO &&
+                            reserve0 * liquidityRatioBps >= 10000
+                        ) {
+                            require(
+                                (reserve0 * liquidityRatioBps) / 10000 >=
+                                    amount,
+                                "High price impact on PCS liquidity"
+                            );
+                        }
+
+                        if (
+                            ourToken == Token.ONE &&
+                            reserve1 * liquidityRatioBps >= 10000
+                        ) {
+                            require(
+                                (reserve1 * liquidityRatioBps) / 10000 >=
+                                    amount,
+                                "High price impact on PCS liquidity"
+                            );
+                        }
+                    }
+
+                    require(
+                        block.timestamp - previousSale[sender] > sellDelay,
+                        "You must wait to sell again."
+                    );
+                }
+            }
         }
 
         // Condition 1: Make sure the contract has the enough tokens to liquefy
@@ -381,7 +431,7 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         // Condition 4: It is not the uniswapPair that is sending tokens
 
         if (
-            balanceOf(address(this)) >= _numberTokensSellToAddToLiquidity &&
+            balanceOf(address(this)) >= numberTokensSellToAddToLiquidity &&
             !_swapAndLiquifyingInProgress &&
             isSwapAndLiquifyingEnabled &&
             sender != address(uniswapV2WETHPair)
@@ -391,7 +441,7 @@ contract DogeViking is DogeVikingMetaData, Ownable {
             sender,
             recipient,
             amount,
-            _isExcludedFromFees[sender] || _isExcludedFromFees[recipient]
+            exceptions[sender].noFees || exceptions[recipient].noFees
         );
     }
 
@@ -411,29 +461,6 @@ contract DogeViking is DogeVikingMetaData, Ownable {
 
         _allowances[owner][beneficiary] = amount;
         emit Approval(owner, beneficiary, amount);
-    }
-
-    // Events *************************************************************
-
-    function setLiquidityFee(uint8 amount) external onlyOwner() {
-        require(amount <= 20, "The maximum amount allowed is 20%");
-        liquidityFee = amount;
-    }
-
-    function setDogeVikingFundFee(uint8 amount) external onlyOwner() {
-        require(amount <= 3, "The maximum amount allowed is 3%");
-        dogeVikingPoolFee = amount;
-    }
-
-    function setTxFee(uint8 amount) external onlyOwner() {
-        require(amount <= 5, "The maximum amount allowed is 5%");
-        txFee = amount;
-    }
-
-    function setPoolAddress(address _address) external onlyOwner() {
-        _isExcludedFromFees[vikingPool] = false;
-        _isExcludedFromFees[_address] = true;
-        vikingPool = _address;
     }
 
     function transfer(address recipient, uint256 amount)
@@ -500,4 +527,120 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         );
         return true;
     }
+
+    // ********************************* SETTERS *********************************
+
+    function setLiquidityFee(uint8 amount) external onlyOwner() {
+        require(amount <= 20, "The maximum amount allowed is 20%");
+        liquidityFee = amount;
+    }
+
+    function setDogeVikingFundFee(uint8 amount) external onlyOwner() {
+        require(amount <= 3, "The maximum amount allowed is 3%");
+        dogeVikingPoolFee = amount;
+    }
+
+    function setTxFee(uint8 amount) external onlyOwner() {
+        require(amount <= 5, "The maximum amount allowed is 5%");
+        txFee = amount;
+    }
+
+    function setPoolAddress(address _address) external onlyOwner() {
+        exceptions[vikingPool].noFees = false;
+        exceptions[_address].noFees = true;
+        vikingPool = _address;
+    }
+
+    function setNumberTokensSellToAddToLiquidity(uint256 _amount)
+        external
+        onlyOwner()
+    {
+        numberTokensSellToAddToLiquidity = _amount;
+    }
+
+    function updateRouter(address _router) external onlyOwner() {
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(_router);
+
+        address pair =
+            IUniswapV2Factory(_uniswapV2Router.factory()).getPair(
+                address(this),
+                _uniswapV2Router.WETH()
+            );
+
+        if (pair == address(0)) {
+            pair = IUniswapV2Factory(_uniswapV2Router.factory()).createPair(
+                address(this),
+                _uniswapV2Router.WETH()
+            );
+        }
+
+        uniswapV2WETHPair = pair;
+        uniswapV2Router = _uniswapV2Router;
+    }
+
+    function excludeFromFees(address account) external onlyOwner() {
+        exceptions[account].noFees = true;
+    }
+
+    function includeInFees(address account) external onlyOwner() {
+        exceptions[account].noFees = false;
+    }
+
+    function excludeFromHoldingLimit(address account) external onlyOwner() {
+        exceptions[account].noHoldingLimit = true;
+    }
+
+    function includeInHoldinglimit(address account) external onlyOwner() {
+        exceptions[account].noHoldingLimit = false;
+    }
+
+    function setMaxHoldingAmount(uint256 _amount) external onlyOwner() {
+        // 0.05% of total supply
+        require(_amount >= 5 * 1e2 ether, "Please set a higher amount");
+        // 0.5% of total supply
+        require(_amount <= 5 * 1e3 ether, "Please set a lower amount");
+        maxHoldingAmount = _amount;
+    }
+
+    function setSellLimitThreshold(uint256 _amount) external onlyOwner() {
+        // 0.05% of total supply
+        require(_amount >= 5 * 1e2 ether, "Please set a higher amount");
+        // 0.5% of total supply
+        require(_amount <= 5 * 1e3 ether, "Please set a lower amount");
+        sellLimitThreshold = _amount;
+    }
+
+    function setSellDelay(uint256 _delay) external onlyOwner() {
+        require(_delay <= 5 days, "The maximum delay is 5 days");
+        require(_delay >= 30 minutes, "The minimum delay is 30 minutes");
+        sellDelay = _delay;
+    }
+
+    function setliquidityRatioBps(uint256 _amount) external onlyOwner() {
+        require(_amount >= 50, "The minimum bpd is 0.5%");
+        require(_amount <= 200, "The maximum bpd is 2%");
+        liquidityRatioBps = _amount;
+    }
+
+    // ********************************* Withdrawals *********************************
+
+    function withdrawETH() external onlyOwner() {
+        (bool success, ) =
+            payable(owner()).call{value: address(this).balance}("");
+        require(success, "Error withdrawing ETH");
+    }
+
+    function withdrawERC20(address _token, address _to)
+        external
+        onlyOwner()
+        returns (bool sent)
+    {
+        require(
+            _token != address(this),
+            "You cannot withdraw this contract tokens."
+        );
+        uint256 _contractBalance = IERC20(_token).balanceOf(address(this));
+        sent = IERC20(_token).transfer(_to, _contractBalance);
+    }
 }
+
