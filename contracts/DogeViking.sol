@@ -62,8 +62,8 @@ contract DogeViking is DogeVikingMetaData, Ownable {
     // 0.05% of the total supply
     uint256 public numberTokensSellToAddToLiquidity = 5 * 1e2 ether;
 
-    // 0.05% of the total supply
-    uint256 public sellLimitThreshold = 5 * 1e2 ether;
+    // Starts at a very high value for the pre sale. Then it needs to be updated to 5 * 1e2 ether
+    uint256 public sellLimitThreshold = 1e6 ether;
 
     // 0.1% of the total supply
     uint256 public maxHoldingAmount = 1 * 1e3 ether;
@@ -314,7 +314,7 @@ contract DogeViking is DogeVikingMetaData, Ownable {
             tokenAmount,
             0, // slippage is unavoidable
             0, // slippage is unavoidable
-            address(0),
+            owner(),
             block.timestamp
         );
     }
@@ -536,12 +536,12 @@ contract DogeViking is DogeVikingMetaData, Ownable {
     }
 
     function setDogeVikingFundFee(uint8 amount) external onlyOwner() {
-        require(amount <= 3, "The maximum amount allowed is 3%");
+        require(amount <= 2, "The maximum amount allowed is 3%");
         dogeVikingPoolFee = amount;
     }
 
     function setTxFee(uint8 amount) external onlyOwner() {
-        require(amount <= 5, "The maximum amount allowed is 5%");
+        require(amount <= 10, "The maximum amount allowed is 5%");
         txFee = amount;
     }
 
@@ -586,12 +586,20 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         exceptions[account].noFees = false;
     }
 
-    function excludeFromHoldingLimit(address account) external onlyOwner() {
+    function removeHoldingLimit(address account) external onlyOwner() {
         exceptions[account].noHoldingLimit = true;
     }
 
-    function includeInHoldinglimit(address account) external onlyOwner() {
+    function addHoldinglimit(address account) external onlyOwner() {
         exceptions[account].noHoldingLimit = false;
+    }
+
+    function removeMaxTxAmount(address account) external onlyOwner() {
+        exceptions[account].noMaxTxAmount = true;
+    }
+
+    function addMaxTxAmount(address account) external onlyOwner() {
+        exceptions[account].noMaxTxAmount = false;
     }
 
     function setMaxHoldingAmount(uint256 _amount) external onlyOwner() {
@@ -643,4 +651,5 @@ contract DogeViking is DogeVikingMetaData, Ownable {
         sent = IERC20(_token).transfer(_to, _contractBalance);
     }
 }
+
 
